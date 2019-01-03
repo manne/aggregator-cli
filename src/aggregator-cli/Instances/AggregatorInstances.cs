@@ -81,7 +81,7 @@ namespace aggregator.cli
         }
 
 
-        internal async Task<bool> Add(InstanceName instance, string location, string requiredVersion)
+        internal async Task<bool> Add(InstanceName instance, string location, string requiredVersion, IEnumerable<string> slotNames, string avZone)
         {
             string rgName = instance.ResourceGroupName;
             logger.WriteVerbose($"Checking if Resource Group {rgName} already exists");
@@ -101,6 +101,60 @@ namespace aggregator.cli
                 logger.WriteInfo($"Resource group {rgName} created.");
             }
 
+            await DeployARMTemplate(instance, rgName);
+
+            if (slotNames != null && slotNames.Any())
+            {
+                var functionApp = await azure
+                    .AppServices
+                    .FunctionApps
+                    .GetByResourceGroupAsync(
+                        instance.ResourceGroupName,
+                        instance.FunctionAppName);
+
+                foreach (string slotName in slotNames)
+                {
+                    var newDeploymentSlot = await functionApp
+                        .DeploymentSlots
+                        .Define(slotName)
+                        .WithConfigurationFromParent()
+                        .CreateAsync();
+                    logger.WriteInfo($"New Deployment Slot {newDeploymentSlot.TargetSwapSlot} created.");
+                }
+            }
+
+
+            // check runtime package
+            var package = new FunctionRuntimePackage(logger);
+            bool ok = await package.UpdateVersion(requiredVersion, instance, azure);
+            if (ok)
+            {
+                var devopsLogonData = DevOpsLogon.Load().connection;
+                if (devopsLogonData.Mode == DevOpsTokenType.PAT)
+                {
+                    logger.WriteVerbose($"Saving Azure DevOps token");
+                    ok = await ChangeAppSettings(instance, devopsLogonData, SaveMode.Default);
+                    if (ok)
+                    {
+                        logger.WriteInfo($"Azure DevOps token saved");
+                    }
+                    else
+                    {
+                        logger.WriteError($"Failed to save Azure DevOps token");
+                    }
+                }
+                else
+                {
+                    logger.WriteWarning($"Azure DevOps token type {devopsLogonData.Mode} is unsupported");
+                    ok = false;
+                }
+            }
+
+            return ok;
+        }
+
+        private async Task DeployARMTemplate(InstanceName instance, string rgName)
+        {
             // IDEA the template should create a Storage account and/or a Key Vault
             var resourceName = "aggregator.cli.Instances.instance-template.json";
             string armTemplateString;
@@ -134,7 +188,7 @@ namespace aggregator.cli
                     .CreateAsync();
 
             // poll
-            const int PollIntervalInSeconds = 3;
+            const int PollIntervalInSeconds = 1;
             int totalDelay = 0;
             while (!(StringComparer.OrdinalIgnoreCase.Equals(deployment.ProvisioningState, "Succeeded") ||
                     StringComparer.OrdinalIgnoreCase.Equals(deployment.ProvisioningState, "Failed") ||
@@ -146,33 +200,6 @@ namespace aggregator.cli
                 await deployment.RefreshAsync();
             }
             logger.WriteInfo($"Deployment {deployment.ProvisioningState}");
-
-            // check runtime package
-            var package = new FunctionRuntimePackage(logger);
-            bool ok = await package.UpdateVersion(requiredVersion, instance, azure);
-            if (ok)
-            {
-                var devopsLogonData = DevOpsLogon.Load().connection;
-                if (devopsLogonData.Mode == DevOpsTokenType.PAT)
-                {
-                    logger.WriteVerbose($"Saving Azure DevOps token");
-                    ok = await ChangeAppSettings(instance, devopsLogonData, SaveMode.Default);
-                    if (ok)
-                    {
-                        logger.WriteInfo($"Azure DevOps token saved");
-                    }
-                    else
-                    {
-                        logger.WriteError($"Failed to save Azure DevOps token");
-                    }
-                }
-                else
-                {
-                    logger.WriteWarning($"Azure DevOps token type {devopsLogonData.Mode} is unsupported");
-                    ok = false;
-                }
-            }
-            return ok;
         }
 
         internal async Task<bool> ChangeAppSettings(InstanceName instance, DevOpsLogon devopsLogonData, SaveMode saveMode)
@@ -250,6 +277,13 @@ namespace aggregator.cli
             return ok;
         }
 
+        internal async Task<bool> SwapToSlot(InstanceName instance, string location, string slot)
+        {
+            bool ok = false;
+
+
+            return ok;
+        }
 
         internal async Task<bool> StreamLogsAsync(InstanceName instance)
         {

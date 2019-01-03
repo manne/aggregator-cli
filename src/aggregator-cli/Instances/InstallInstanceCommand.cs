@@ -21,6 +21,12 @@ namespace aggregator.cli
         [Option("requiredVersion", Required = false, HelpText = "Version of Aggregator Runtime required.")]
         public string RequiredVersion { get; set; }
 
+        // support App Service Deployment Slots
+        [Option('s', "slots", SetName = "slot", Required = true, HelpText = "Set slot deployment.")]
+        public IEnumerable<string> Slots { get; set; }
+        [Option('z', "avzone", SetName = "slot", Required = false, HelpText = "Set slot Availability Zone.")]
+        public string AvZone { get; set; }
+
         internal override async Task<int> RunAsync()
         {
             var context = await Context
@@ -29,7 +35,7 @@ namespace aggregator.cli
                 .Build();
             var instances = new AggregatorInstances(context.Azure, context.Logger);
             var instance = new InstanceName(Name, ResourceGroup);
-            bool ok = await instances.Add(instance, Location, RequiredVersion);
+            bool ok = await instances.Add(instance, Location, RequiredVersion, Slots, AvZone);
             return ok ? 0 : 1;
         }
     }
